@@ -5,9 +5,13 @@
  */
 package csci476lab4;
 
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Set;
 import org.jnetpcap.Pcap;
 import org.jnetpcap.packet.JPacket;
 import org.jnetpcap.packet.JPacketHandler;
+import org.jnetpcap.protocol.network.Ip4;
 import org.jnetpcap.protocol.tcpip.Http;
 import org.jnetpcap.protocol.tcpip.Tcp;
 
@@ -23,42 +27,23 @@ public class scannerfinder {
     public static void main(String[] args) {
         // TODO code application logic here
         
-        final String FILENAME = "res/pcapFile/lbl-internal.20041004-1305.port002.dump.pcap";  
+        final String FILENAME = args[0];  
         final StringBuilder errbuf = new StringBuilder();  
+        HashMap<String, int[]> map = new HashMap<>();
   
+        //from tutorial
         final Pcap pcap = Pcap.openOffline(FILENAME, errbuf);  
         if (pcap == null) {  
             System.err.println(errbuf); // Error is stored in errbuf if any  
             return;  
         }
         
-        /* 
-         * We have an opened the capture file now time to read packets. We use a 
-         * Pcap.loop function to retrieve 10 packets from the file. We supply an 
-         * annonymous handler which will receive packets as they are read from the 
-         * offline file by libpcap. We parameterize it with a StringBuilder class. 
-         * This allows us to pass in any type of object we need inside the our 
-         * dispatch handler. For this example we are passing in the errorbuf object 
-         * so we can pass back a string, if we need to. Of course in our example 
-         * this is not strictly needed since our anonymous class can access errbuf 
-         * object directly from the enclosing main method as that local variable is 
-         * marked final allowing anonymous classes access to it. 
-         */  
+        //LOOP_INFINITE goes until EOF
         pcap.loop(Pcap.LOOP_INFINITE, new JPacketHandler<StringBuilder>() {  
-  
-            /** 
-             * We purposely define and allocate our working tcp header (accessor) 
-             * outside the dispatch function and thus the libpcap loop, as this type 
-             * of object is reusable and it would be a very big waist of time and 
-             * resources to allocate it per every dispatch of a packet. We mark it 
-             * final since we do not plan on allocating any other instances of Tcp. 
-             */  
-            final Tcp tcp = new Tcp();  
-  
-            /* 
-             * Same thing for our http header 
-             */  
-            final Http http = new Http();  
+            
+            final Tcp tcp = new Tcp();    
+            
+            final Ip4 ip = new Ip4();
   
             /** 
              * Our custom handler that will receive all the packets libpcap will 
@@ -75,70 +60,82 @@ public class scannerfinder {
              */  
             @Override
             public void nextPacket(JPacket packet, StringBuilder errbuf) {  
-  
-                /* 
-                 * Here we receive 1 packet at a time from the capture file. We are 
-                 * going to check if we have a tcp packet and do something with tcp 
-                 * header. We are actually going to do this twice to show 2 different 
-                 * ways how we can check if a particular header exists in the packet and 
-                 * then get that header (peer header definition instance with memory in 
-                 * the packet) in 2 separate steps. 
-                 */  
-                if (packet.hasHeader(Tcp.ID)) {  
-  
-                    /* 
-                     * Now get our tcp header definition (accessor) peered with actual 
-                     * memory that holds the tcp header within the packet. 
-                     */  
-                    packet.getHeader(tcp);  
-  
-                    System.out.printf("tcp.dst_port=%d%n", tcp.destination());  
-                    System.out.printf("tcp.src_port=%d%n", tcp.source());  
-                    System.out.printf("tcp.ack=%x%n", tcp.ack());  
-  
+                
+                //if it has both headers grab them both
+                //Potentially unneeded but the tutorial reccomends it
+                if (packet.hasHeader(Tcp.ID) && packet.hasHeader(Ip4.ID)) {   
+                    packet.getHeader(tcp); 
+                    packet.getHeader(ip);
+
                 }  
-  
-                /* 
-                 * An easier way of checking if header exists and peering with memory 
-                 * can be done using a conveniece method JPacket.hasHeader(? extends 
-                 * JHeader). This method performs both operations at once returning a 
-                 * boolean true or false. True means that header exists in the packet 
-                 * and our tcp header difinition object is peered or false if the header 
-                 * doesn't exist and no peering was performed. 
-                 */  
-                if (packet.hasHeader(tcp)) {  
-                    System.out.printf("tcp header::%s%n", tcp.toString());  
-                }  
-  
-                /* 
-                 * A typical and common approach to getting headers from a packet is to 
-                 * chain them as a condition for the if statement. If we need to work 
-                 * with both tcp and http headers, for example, we place both of them on 
-                 * the command line. 
-                 */  
-                if (packet.hasHeader(tcp) && packet.hasHeader(http)) {  
-                    /* 
-                     * Now we are guarranteed to have both tcp and http header peered. If 
-                     * the packet only contained tcp segment even though tcp may have http 
-                     * port number, it still won't show up here since headers appear right 
-                     * at the beginning of http session. 
-                     */  
-  
-                    System.out.printf("http header::%s%n", http);  
-  
-                    /* 
-                     * jNetPcap keeps track of frame numbers for us. The number is simply 
-                     * incremented with every packet scanned. 
-                     */  
-  
-                }  
-  
-                System.out.printf("frame #%d%n", packet.getFrameNumber());  
+ 
+                //double checking
+                if (packet.hasHeader(tcp) && packet.hasHeader(ip)) {  
+                    
+                    //if it is SYN but not ack'd it is an outgoing packet
+                    if (tcp.flags_SYN() && !tcp.flags_ACK()){
+                        //string key since java defaults to signed bytes
+                        //it is stored as unsigned bytes so have to convert
+                        String key = "";
+                        for(int i = 0; i < ip.source().length; i++){
+                            //convert to unsigned byte (@returns int)
+                            //converted to string by java auto casting
+                            key += (ip.source()[i] & 0xFF);
+                            if(i != 3){
+                                key += ".";
+                            }
+                        }
+                        
+                        if (map.containsKey(key)){
+                            //if the key exists add one to sent syn packets
+                            map.put(key, new int[]{map.get(key)[0] + 1,  map.get(key)[1]});
+                        }else{
+                            //otherwise make a new one with 1 sent syn packet
+                            map.put(key, new int[]{1, 0});
+                        }
+                    //if syn'd and ack'd it is the other machines response.
+                    }else if (tcp.flags_SYN() && tcp.flags_ACK()){
+                        //string key since java defaults to signed bytes
+                        //it is stored as unsigned bytes so have to convert
+                        String key = "";
+                        for(int i = 0; i < ip.destination().length; i++){
+                            //convert to unsigned byte (@returns int)
+                            //converted to string by java auto casting
+                            key += (ip.destination()[i] & 0xFF);
+                            if(i != 3){
+                                key += ".";
+                            }
+                        }
+                        
+                        if (map.containsKey(key)){
+                            //if the map has that ip as suspicious, log an ack
+                            map.put(key, new int[]{map.get(key)[0],  map.get(key)[1] + 1});
+                        }
+                    }
+                }   
             }  
   
         }, errbuf);  
         
-        System.out.println(errbuf);
+        //to loop though maps keys.
+        Set<String> keys = map.keySet();
+        
+        //loop to print out the suspicous ips
+        for(String key : keys){
+            try{
+                //@throws ArithmeticException when map.get(key)[1] = 0
+                if(map.get(key)[0] / map.get(key)[1] >= 3){
+                    System.out.printf("IP %s with 3x as many unacked packets\n", key);
+                }
+            }catch (ArithmeticException e){
+                //print all the ips that never got any ack, maybe attacking
+                //probably not though.
+                System.out.printf("IP %s with 0 acked packets\n", key);
+            }
+        }
+        
+        //if there were any errors print them just in case
+        System.err.println(errbuf);
         
     }
     
